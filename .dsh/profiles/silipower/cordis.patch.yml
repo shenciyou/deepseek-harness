@@ -1,0 +1,19 @@
+# Silipower profile patch layer. dsh-base + dsh-web-app already compose the LLM
+# (DeepSeek), API gateway, webserver, skill, web-search, settings, and
+# credentials plugins. This layer adds SQLite domain persistence and the
+# silipower business plugin on top.
+
+- insert:
+    - id: storage-sqlite
+      name: '@deepseek-ai/dsh-storage-sqlite'
+      config:
+        path: !!js dshHomePath('silipower.sqlite')
+
+    - id: silipower
+      name: '@silipower/dsh-silipower'
+
+# The web-app bundle already mounts storage-domain with the json backend; route
+# it onto the sqlite backend registered above.
+- id: storage-domain
+  config:
+    backend: sqlite
