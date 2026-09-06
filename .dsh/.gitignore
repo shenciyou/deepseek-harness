@@ -1,0 +1,10 @@
+# runtime data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+attachments/
+
+# generated default profile (this repo uses the silipower profile)
+profiles/web/
+.credentials.yaml
+.anonymous-user-id
