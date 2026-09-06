@@ -34,6 +34,6 @@ export const silipowerDomainSpec = defineDomain({
   version: 0,
   tables: {
     materials: domainTable<string, Material>(materialSchema),
-    publishRecords: domainTable<string, PublishRecord>(publishRecordSchema),
+    publish_records: domainTable<string, PublishRecord>(publishRecordSchema),
   },
 })
