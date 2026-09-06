@@ -17,3 +17,21 @@
 - id: storage-domain
   config:
     backend: sqlite
+
+# Full-text session search stays opt-in in the web bundle. Turn it on with a
+# durable derived index so the silipower knowledge surface can query it.
+- id: session-query-sqlite
+  config:
+    path: !!js dshHomePath('session-search.sqlite')
+    openAt: first-search
+
+# The web bundle disables the host filesystem skill provider because agent
+# presets own local discovery. Re-enable it only for Silipower's business
+# skills, pointed at the packaged skill content next to this plugin.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  disabled: false
+  config:
+    includeDefaultRoots: false
+    customSkillDirs:
+      - !!js process.cwd() + '/packages/silipower/skill-content'
