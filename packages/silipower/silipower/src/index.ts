@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { Service } from '@deepseek-ai/cordis'
@@ -5,18 +6,35 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { DEV_ACTORS_ENV, readHeader, type RequestHeaders } from './auth.ts'
+import {
+  DEFAULT_GENERATION_MODEL,
+  DEFAULT_GENERATION_PROVIDER,
+  GenerationService,
+  metaPayload,
+  type LlmPort,
+  type ProjectContext,
+  type SkillPort,
+} from './generate.ts'
+import { corsHeaders, handleGenerateRequest, type GenerateOutcome } from './http.ts'
 import { silipowerDomainSpec } from './spec.ts'
 import type { Material } from './spec.ts'
 
 export const name = '@silipower/dsh-silipower'
 
-const DEFAULT_PROVIDER = 'deepseek-official'
-const DEFAULT_MODEL = 'deepseek-v4-flash'
-
 declare module '@deepseek-ai/cordis' {
   interface Context {
     silipower: SilipowerService
   }
+}
+
+function readRawBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk) => { chunks.push(Buffer.from(chunk)) })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
 }
 
 function readJson(req: IncomingMessage): Promise<unknown> {
@@ -36,21 +54,80 @@ function readJson(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-function corsHeaders(): Record<string, string> {
+/**
+ * Parse the comma-separated CORS allow list.
+ *
+ * Blank entries are dropped rather than interpreted as "any", so a trailing
+ * comma or an empty variable narrows the list instead of opening it.
+ * @param raw - The raw `SILIPOWER_ALLOWED_ORIGINS` value.
+ * @returns the allowed origins.
+ */
+function parseAllowedOrigins(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(origin => origin !== '')
+}
+
+/**
+ * Adapt the DSH LLM service to the generation port.
+ *
+ * The prepared call pins one adapter generation, and `stream` refuses a request
+ * whose config differs from the prepared one, so the resolved config is replayed
+ * verbatim. The generation port's small message shape is translated here rather
+ * than in `generate.ts`, which must stay independent of the harness.
+ * @param ctx - The plugin context.
+ * @returns the LLM port.
+ */
+function llmPort(ctx: Context): LlmPort {
   return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    prepareCall: async ({ provider, model }) => {
+      const call = await ctx.llm.prepareCall({ provider, model })
+      return {
+        stream: input => call.stream({
+          ...call.config,
+          messages: input.messages.map(message => createUserMessage({
+            content: [...message.content],
+            source: { kind: 'user' },
+          })),
+        }),
+      }
+    },
   }
 }
 
-function sendJson(res: ServerResponse, status: number, value: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders() })
-  res.end(JSON.stringify(value))
+/**
+ * Adapt the DSH skill registry to the generation port.
+ * @param skills - The skill registry.
+ * @returns the skill port.
+ */
+function skillPort(skills: SkillRegistryLike): SkillPort {
+  return {
+    read: async name => (await skills.get(name))?.content,
+  }
 }
 
-function sendPreflight(res: ServerResponse): void {
-  res.writeHead(204, corsHeaders())
+/**
+ * Write a generate outcome onto the transport.
+ *
+ * A rejected request is buffered JSON and can still choose its status. A stream
+ * has already sent its status line, so a failure past that point is appended as
+ * one `error` event — which the generation service already emits — and never
+ * rewrites the status.
+ * @param res - The response to write.
+ * @param outcome - The handler result.
+ */
+async function writeOutcome(res: ServerResponse, outcome: GenerateOutcome): Promise<void> {
+  res.writeHead(outcome.status, outcome.headers)
+  if (outcome.kind === 'json') {
+    res.end(outcome.body === undefined ? undefined : JSON.stringify(outcome.body))
+    return
+  }
+  try {
+    for await (const line of outcome.lines) res.write(line)
+  } catch (error) {
+    console.error('[silipower] generation stream failed after headers were sent', error)
+  }
   res.end()
 }
 
@@ -62,9 +139,14 @@ interface WebRuntimeLike {
   search(request: { query: string; maxResults?: number }): Promise<unknown>
 }
 
+/** The part of a registered skill the generation port reads. */
+interface SkillDefinitionLike {
+  readonly content: string
+}
+
 interface SkillRegistryLike {
   list(): Promise<unknown>
-  get(name: string): Promise<unknown>
+  get(name: string): Promise<SkillDefinitionLike | undefined>
 }
 
 interface AttachmentStoreLike {
@@ -81,6 +163,7 @@ export class SilipowerService extends TypertRemoteService {
   static inject = ['storageDomain', 'webServer', 'llm', 'web', 'skills', 'attachments', 'sessionQuery']
 
   private materials?: KvTable<string, Material>
+  private generation?: GenerationService
 
   constructor(ctx: Context) {
     super(ctx, 'silipower')
@@ -91,12 +174,42 @@ export class SilipowerService extends TypertRemoteService {
     this.ctx.effect(() => async () => { await domain.close() }, 'silipower.domainClose')
     this.materials = domain.table('materials')
 
+    this.generation = new GenerationService({
+      llm: llmPort(this.ctx),
+      skills: skillPort(this.requireSkills()),
+      newRunId: () => `run_${randomUUID()}`,
+      provider: DEFAULT_GENERATION_PROVIDER,
+      model: DEFAULT_GENERATION_MODEL,
+    })
+
+    const origins = parseAllowedOrigins(process.env.SILIPOWER_ALLOWED_ORIGINS)
+    const cors = (req: IncomingMessage): Record<string, string> =>
+      corsHeaders(readHeader(req.headers as RequestHeaders, 'origin'), origins)
+    const reply = (req: IncomingMessage, res: ServerResponse, status: number, value: unknown): void => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...cors(req) })
+      res.end(JSON.stringify(value))
+    }
+    const preflight = (req: IncomingMessage, res: ServerResponse): void => {
+      res.writeHead(204, cors(req))
+      res.end()
+    }
+
     const disposeHealth = this.ctx.webServer.register({
       kind: 'exact',
       path: '/api/silipower/health',
       handler: (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
-        sendJson(res, 200, { ok: true, service: 'silipower-dsh-api' })
+        if (req.method === 'OPTIONS') return preflight(req, res)
+        reply(req, res, 200, { ok: true, service: 'silipower-dsh-api' })
+      },
+    })
+
+    const disposeMeta = this.ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/silipower/meta',
+      handler: (req, res) => {
+        if (req.method === 'OPTIONS') return preflight(req, res)
+        if (req.method !== 'GET') return reply(req, res, 405, { ok: false, error: 'method not allowed' })
+        reply(req, res, 200, { ok: true, value: metaPayload() })
       },
     })
 
@@ -104,14 +217,18 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'exact',
       path: '/api/silipower/generate',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
-        try {
-          const body = (await readJson(req) ?? {}) as { content?: string }
-          const content = await this.generateText(body.content ?? '')
-          sendJson(res, 200, { ok: true, content })
-        } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
-        }
+        const outcome = await handleGenerateRequest({
+          method: req.method ?? 'GET',
+          headers: req.headers as RequestHeaders,
+          rawBody: await readRawBody(req),
+          nodeEnv: process.env.NODE_ENV,
+          devActors: process.env[DEV_ACTORS_ENV],
+          allowedOrigins: origins,
+          requestId: `req_${randomUUID()}`,
+          generation: this.requireGeneration(),
+          context: (scope): ProjectContext => ({ organizationId: scope.organizationId }),
+        })
+        await writeOutcome(res, outcome)
       },
     })
 
@@ -119,19 +236,19 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'prefix',
       path: '/api/silipower/materials',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
           if (req.method === 'GET') {
-            return sendJson(res, 200, { ok: true, value: await this.listMaterials() })
+            return reply(req, res, 200, { ok: true, value: await this.listMaterials() })
           }
           if (req.method === 'POST') {
             const body = (await readJson(req)) as Material | undefined
-            if (body === undefined) return sendJson(res, 400, { ok: false, error: 'missing material body' })
-            return sendJson(res, 200, { ok: true, value: await this.saveMaterial(body) })
+            if (body === undefined) return reply(req, res, 400, { ok: false, error: 'missing material body' })
+            return reply(req, res, 200, { ok: true, value: await this.saveMaterial(body) })
           }
-          sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          reply(req, res, 405, { ok: false, error: 'method not allowed' })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
@@ -140,11 +257,11 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'exact',
       path: '/api/silipower/stats',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
-          sendJson(res, 200, { ok: true, value: await this.stats() })
+          reply(req, res, 200, { ok: true, value: await this.stats() })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
@@ -153,12 +270,12 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'exact',
       path: '/api/silipower/search',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
           const body = (await readJson(req) ?? {}) as { query?: string; maxResults?: number }
-          sendJson(res, 200, { ok: true, value: await this.searchWeb(body.query ?? '', body.maxResults) })
+          reply(req, res, 200, { ok: true, value: await this.searchWeb(body.query ?? '', body.maxResults) })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
@@ -167,18 +284,18 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'prefix',
       path: '/api/silipower/skills',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
-          if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          if (req.method !== 'GET') return reply(req, res, 405, { ok: false, error: 'method not allowed' })
           const pathname = new URL(req.url ?? '/', 'http://x').pathname
           if (pathname === '/api/silipower/skills') {
-            return sendJson(res, 200, { ok: true, value: await this.listSkills() })
+            return reply(req, res, 200, { ok: true, value: await this.listSkills() })
           }
-          const name = decodeURIComponent(pathname.slice('/api/silipower/skills/'.length))
-          if (name === '') return sendJson(res, 400, { ok: false, error: 'missing skill name' })
-          sendJson(res, 200, { ok: true, value: (await this.getSkill(name)) ?? null })
+          const skillName = decodeURIComponent(pathname.slice('/api/silipower/skills/'.length))
+          if (skillName === '') return reply(req, res, 400, { ok: false, error: 'missing skill name' })
+          reply(req, res, 200, { ok: true, value: (await this.getSkill(skillName)) ?? null })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
@@ -187,31 +304,31 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'prefix',
       path: '/api/silipower/attachments',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
           const pathname = new URL(req.url ?? '/', 'http://x').pathname
           if (req.method === 'POST' && pathname === '/api/silipower/attachments') {
             const body = (await readJson(req)) as { mediaType?: string; dataBase64?: string; name?: string } | undefined
             if (body === undefined || typeof body.mediaType !== 'string' || typeof body.dataBase64 !== 'string') {
-              return sendJson(res, 400, { ok: false, error: 'mediaType and dataBase64 are required' })
+              return reply(req, res, 400, { ok: false, error: 'mediaType and dataBase64 are required' })
             }
             const value = await this.saveAttachment({
               data: new Uint8Array(Buffer.from(body.dataBase64, 'base64')),
               mediaType: body.mediaType,
               ...(body.name === undefined ? {} : { name: body.name }),
             })
-            return sendJson(res, 200, { ok: true, value })
+            return reply(req, res, 200, { ok: true, value })
           }
           if (req.method === 'POST' && pathname === '/api/silipower/attachments/read') {
             const body = (await readJson(req)) as Record<string, unknown> | undefined
             if (body === undefined || typeof body.attachmentId !== 'string') {
-              return sendJson(res, 400, { ok: false, error: 'attachment ref is required' })
+              return reply(req, res, 400, { ok: false, error: 'attachment ref is required' })
             }
-            return sendJson(res, 200, { ok: true, value: await this.readAttachment(body) })
+            return reply(req, res, 200, { ok: true, value: await this.readAttachment(body) })
           }
-          sendJson(res, 405, { ok: false, error: 'method not allowed' })
+          reply(req, res, 405, { ok: false, error: 'method not allowed' })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
@@ -220,18 +337,19 @@ export class SilipowerService extends TypertRemoteService {
       kind: 'exact',
       path: '/api/silipower/session-search',
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return sendPreflight(res)
+        if (req.method === 'OPTIONS') return preflight(req, res)
         try {
           const body = (await readJson(req) ?? {}) as { query?: string; limit?: number }
-          sendJson(res, 200, { ok: true, value: await this.searchSessions(body.query ?? '', body.limit) })
+          reply(req, res, 200, { ok: true, value: await this.searchSessions(body.query ?? '', body.limit) })
         } catch (error) {
-          sendJson(res, 500, { ok: false, error: errorOf(error) })
+          reply(req, res, 500, { ok: false, error: errorOf(error) })
         }
       },
     })
 
     this.ctx.effect(() => () => {
       disposeHealth()
+      disposeMeta()
       disposeGenerate()
       disposeMaterials()
       disposeStats()
@@ -249,7 +367,7 @@ export class SilipowerService extends TypertRemoteService {
 
   @Remote('listMaterials')
   async listMaterials(): Promise<Material[]> {
-    return [...(this.requireMaterials().entries())].map(([, material]) => material)
+    return [...this.requireMaterials().entries()].map(([, material]) => material)
   }
 
   @Remote('saveMaterial')
@@ -299,6 +417,11 @@ export class SilipowerService extends TypertRemoteService {
     return this.requireSessionQuery().searchSessions({ query, ...(limit !== undefined ? { limit } : {}) })
   }
 
+  private requireGeneration(): GenerationService {
+    if (this.generation === undefined) throw new Error('silipower generation service is not initialized')
+    return this.generation
+  }
+
   private requireMaterials(): KvTable<string, Material> {
     if (this.materials === undefined) throw new Error('silipower domain is not initialized')
     return this.materials
@@ -326,21 +449,6 @@ export class SilipowerService extends TypertRemoteService {
     const service = this.ctx.get('sessionQuery')
     if (service === undefined) throw new Error('sessionQuery service is unavailable in this profile')
     return service as SessionQueryLike
-  }
-
-  private async generateText(input: string): Promise<string> {
-    const call = await this.ctx.llm.prepareCall({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL })
-    let output = ''
-    for await (const chunk of call.stream({
-      ...call.config,
-      messages: [createUserMessage({
-        content: [{ type: 'text', text: input }],
-        source: { kind: 'user' },
-      })],
-    })) {
-      if (chunk.type === 'text-delta') output += chunk.text
-    }
-    return output
   }
 }
 

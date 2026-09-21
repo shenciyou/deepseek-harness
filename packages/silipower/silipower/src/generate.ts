@@ -141,6 +141,26 @@ export function buildPrompt(input: {
 }
 
 /**
+ * The public description of what generation supports.
+ *
+ * Deliberately narrow: the function types and the skills they route through.
+ * It must never grow to include the provider, the model credential reference,
+ * environment values, or any filesystem path — a meta endpoint is the easiest
+ * place for an internal detail to leak.
+ * @returns the capability payload.
+ */
+export function metaPayload(): {
+  readonly functionTypes: readonly { readonly functionType: GenerateFunctionType; readonly skillName: string }[]
+} {
+  return {
+    functionTypes: Object.values(GENERATION_PROFILES).map(profile => ({
+      functionType: profile.functionType,
+      skillName: profile.skillName,
+    })),
+  }
+}
+
+/**
  * Serialise one event as a single NDJSON line.
  * @param event - The event.
  * @returns the line, including its trailing newline.

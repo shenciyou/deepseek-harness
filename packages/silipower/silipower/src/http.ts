@@ -1,5 +1,7 @@
 import { readHeader, resolveScope, type RequestHeaders, type RequestScope } from './auth.ts'
+import type { GenerateRequest } from './contracts.ts'
 import { failure, isFailure, statusOf, toErrorPayload } from './errors.ts'
+import { toNdjson, type GenerationEvent, type PreparedGeneration, type ProjectContext } from './generate.ts'
 
 /** The parts of a request a route handler reads. */
 export interface RouteRequest {
@@ -33,6 +35,97 @@ export interface RouteInput {
 }
 
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8'
+
+/** Media type of the generation stream: one JSON event per line. */
+export const NDJSON_CONTENT_TYPE = 'application/x-ndjson; charset=utf-8'
+
+/** The half of the generation service the route depends on. */
+export interface GenerationPort {
+  prepare(request: GenerateRequest, context: ProjectContext): Promise<PreparedGeneration>
+  stream(prepared: PreparedGeneration): AsyncIterable<GenerationEvent>
+}
+
+/** One generate request, already read off the transport. */
+export interface GenerateRequestInput {
+  readonly method: string
+  readonly headers: RequestHeaders
+  readonly rawBody: string
+  readonly nodeEnv: string | undefined
+  readonly devActors: string | undefined
+  readonly allowedOrigins: readonly string[]
+  readonly requestId: string
+  readonly generation: GenerationPort
+  readonly context: (scope: RequestScope) => ProjectContext
+}
+
+/**
+ * Either a stream of NDJSON lines or a buffered JSON envelope.
+ *
+ * The two are separate shapes rather than one with an optional field: a route
+ * that has started streaming cannot change its status any more, so the decision
+ * has to be forced before the first byte goes out.
+ */
+export type GenerateOutcome =
+  | {
+    readonly kind: 'stream'
+    readonly status: 200
+    readonly headers: Record<string, string>
+    readonly lines: AsyncIterable<string>
+  }
+  | {
+    readonly kind: 'json'
+    readonly status: number
+    readonly headers: Record<string, string>
+    readonly body: unknown
+  }
+
+/**
+ * Serve `POST /api/silipower/generate`.
+ *
+ * Everything that can fail — auth, method, JSON, the contract, skill routing —
+ * runs before the stream is opened, so a rejected request is an ordinary JSON
+ * error rather than a stream that ends early.
+ * @param input - The request and its dependencies.
+ * @returns the stream to pipe, or a JSON envelope.
+ */
+export async function handleGenerateRequest(input: GenerateRequestInput): Promise<GenerateOutcome> {
+  const cors = corsHeaders(readHeader(input.headers, 'origin'), input.allowedOrigins)
+  try {
+    if (input.method === 'OPTIONS') {
+      return { kind: 'json', status: 204, headers: { 'x-request-id': input.requestId, ...cors }, body: undefined }
+    }
+
+    const scope = resolveScope({
+      headers: input.headers,
+      nodeEnv: input.nodeEnv,
+      devActors: input.devActors,
+    })
+
+    if (input.method !== 'POST') {
+      throw failure('METHOD_NOT_ALLOWED', `${input.method} is not allowed here`)
+    }
+
+    const prepared = await input.generation.prepare(
+      parseJsonBody(input.rawBody) as GenerateRequest,
+      input.context(scope),
+    )
+
+    return {
+      kind: 'stream',
+      status: 200,
+      headers: { 'Content-Type': NDJSON_CONTENT_TYPE, 'x-request-id': input.requestId, ...cors },
+      lines: serialize(input.generation.stream(prepared)),
+    }
+  } catch (error) {
+    if (!isFailure(error)) console.error('[silipower] unhandled generate error', error)
+    const response = errorResponse(error, input.requestId, cors)
+    return { kind: 'json', status: response.status, headers: response.headers, body: response.body }
+  }
+}
+
+async function* serialize(events: AsyncIterable<GenerationEvent>): AsyncIterable<string> {
+  for await (const event of events) yield toNdjson(event)
+}
 
 /**
  * Parse a raw request body.
