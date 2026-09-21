@@ -403,6 +403,7 @@
     { "path": "./packages/lsp/lsp" },
     { "path": "./packages/lsp/lsp-stdio" },
     { "path": "./packages/lsp/tool-lsp" },
+    { "path": "./packages/silipower/silipower" },
     { "path": "./apps/cli" },
     { "path": "./apps/desktop-host" },
     { "path": "./apps/desktop" }
