@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { Service } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { silipowerDomainSpec } from './spec.ts'
-import type { Material, PublishRecord } from './spec.ts'
+import type { Material } from './spec.ts'
 
 export const name = '@silipower/dsh-silipower'
 
@@ -79,7 +81,6 @@ export class SilipowerService extends TypertRemoteService {
   static inject = ['storageDomain', 'webServer', 'llm', 'web', 'skills', 'attachments', 'sessionQuery']
 
   private materials?: KvTable<string, Material>
-  private publishRecords?: KvTable<string, PublishRecord>
 
   constructor(ctx: Context) {
     super(ctx, 'silipower')
@@ -89,7 +90,6 @@ export class SilipowerService extends TypertRemoteService {
     const domain = await this.ctx.storageDomain.open(silipowerDomainSpec)
     this.ctx.effect(() => async () => { await domain.close() }, 'silipower.domainClose')
     this.materials = domain.table('materials')
-    this.publishRecords = domain.table('publish_records')
 
     const disposeHealth = this.ctx.webServer.register({
       kind: 'exact',
@@ -198,7 +198,7 @@ export class SilipowerService extends TypertRemoteService {
             const value = await this.saveAttachment({
               data: new Uint8Array(Buffer.from(body.dataBase64, 'base64')),
               mediaType: body.mediaType,
-              name: body.name,
+              ...(body.name === undefined ? {} : { name: body.name }),
             })
             return sendJson(res, 200, { ok: true, value })
           }
@@ -333,7 +333,10 @@ export class SilipowerService extends TypertRemoteService {
     let output = ''
     for await (const chunk of call.stream({
       ...call.config,
-      messages: [{ role: 'user', content: [{ type: 'text', text: input }] }],
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: input }],
+        source: { kind: 'user' },
+      })],
     })) {
       if (chunk.type === 'text-delta') output += chunk.text
     }

@@ -3,6 +3,7 @@
 *.sqlite-shm
 *.sqlite-wal
 attachments/
+logs/
 
 # generated default profile (this repo uses the silipower profile)
 profiles/web/
