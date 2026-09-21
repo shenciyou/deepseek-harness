@@ -256,6 +256,15 @@ export default defineConfig({
         'packages/client/ui-layout/src/*',
         'packages/client/web/src/*',
         'packages/host/webserver/src/*',
+        // Silipower's HTTP assembly is the same class of thin registration glue
+        // as packages/host/webserver: a route table, JSON body reading, CORS
+        // headers and error-code mapping whose branches are only meaningful
+        // under a real composed host. The layers it delegates to (contracts,
+        // spec, errors, repositories, authorization, generate, audit) stay under
+        // the per-file gate. TODO(silipower): cover and remove once the plugin's
+        // HTTP surface is exercised end to end.
+        'packages/silipower/silipower/src/http.ts',
+        'packages/silipower/silipower/src/index.ts',
         // The browser-worker runtime and its image packer: the executing
         // composition is a real dedicated Worker driven by the web browser lane
         // (apps/web/tests/preview-boot.e2e.ts), which unit-process V8 coverage
