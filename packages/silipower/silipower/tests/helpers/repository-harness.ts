@@ -1,5 +1,7 @@
 import type { AuditAction } from '../../src/repositories/base.ts'
 import type { KvLike } from '../../src/repositories/base.ts'
+import type { MaterialSummary } from '../../src/repositories/publish-record-repository.ts'
+import { failure } from '../../src/errors.ts'
 import type { RequestScope } from '../../src/auth.ts'
 import type { AuditEvent, PublishRecord } from '../../src/spec.ts'
 
@@ -58,6 +60,27 @@ export function auditTable(): KvLike<AuditEvent> {
       store.set(key, value)
     },
     delete: async key => store.delete(key),
+  }
+}
+
+/** A material summary fixture; only the three fields a publish list carries. */
+export function materialSummary(id: string, overrides: Partial<MaterialSummary> = {}): MaterialSummary {
+  return { id, name: `material ${id}`, type: 'script', ...overrides }
+}
+
+/**
+ * A material lookup that resolves exactly the given ids and answers `NOT_FOUND`
+ * for everything else, which is what the real material repository does.
+ * @param known - The materials this lookup can read.
+ * @returns the port.
+ */
+export function materialLookup(known: readonly MaterialSummary[] = []) {
+  return {
+    get: (_scope: RequestScope, id: string): MaterialSummary => {
+      const material = known.find(candidate => candidate.id === id)
+      if (material === undefined) throw failure('NOT_FOUND', `material ${id} not found`)
+      return material
+    },
   }
 }
 

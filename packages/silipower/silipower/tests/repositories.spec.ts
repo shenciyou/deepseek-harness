@@ -5,7 +5,7 @@ import { PublishRecordRepository } from '../src/repositories/publish-record-repo
 import { AuditLog } from '../src/audit.ts'
 import { materialSchema } from '../src/spec.ts'
 import { memoryTable } from './helpers/memory-table.ts'
-import { auditTable, repositoryHarness } from './helpers/repository-harness.ts'
+import { auditTable, materialLookup, materialSummary, repositoryHarness } from './helpers/repository-harness.ts'
 
 const ORG_A = 'org_a'
 const ORG_B = 'org_b'
@@ -187,6 +187,7 @@ describe('PublishRecordRepository', () => {
         now: h.now,
         newId: h.newId,
         onWrite: h.onWrite,
+        materials: materialLookup([materialSummary('mat_1')]),
       }),
     }
   }

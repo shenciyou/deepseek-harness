@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import { generateFunctionTypeSchema, materialTypeSchema } from './contracts.ts'
+import {
+  generateFunctionTypeSchema,
+  materialTypeSchema,
+  publishStatusSchema,
+  taskStatusSchema,
+} from './contracts.ts'
 
 /**
  * Silipower durable domain, version 1.
@@ -41,12 +46,6 @@ export const memberRoleSchema = z.enum(['owner', 'operator', 'viewer', 'platform
 
 /** How a record came to exist, which decides whether a user may edit it. */
 export const dataSourceSchema = z.enum(['mock', 'user', 'openapi'])
-
-/** Lifecycle of a content task or a work-plan task. */
-export const taskStatusSchema = z.enum(['pending', 'processing', 'completed', 'cancelled'])
-
-/** Lifecycle of a publish record. */
-export const publishStatusSchema = z.enum(['draft', 'scheduled', 'published', 'failed'])
 
 /** The tenant root. Carries no `organizationId` because it is the organization. */
 export const organizationSchema = z.object({

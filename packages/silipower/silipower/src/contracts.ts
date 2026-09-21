@@ -63,6 +63,57 @@ export const materialListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 })
 
+/** Lifecycle of a content task or a work-plan task. */
+export const taskStatusSchema = z.enum(['pending', 'processing', 'completed', 'cancelled'])
+
+/** Lifecycle of a publish record. */
+export const publishStatusSchema = z.enum(['draft', 'scheduled', 'published', 'failed'])
+
+/** Body of `POST /api/silipower/content-tasks`. */
+export const contentTaskCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  relatedTopic: z.string().optional(),
+  materialId: z.string().min(1).optional(),
+  projectId: z.string().min(1).nullable().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/content-tasks/:id`; `status` must be a legal step. */
+export const contentTaskPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  status: taskStatusSchema.optional(),
+  description: z.string().optional(),
+  relatedTopic: z.string().optional(),
+  materialId: z.string().min(1).optional(),
+  projectId: z.string().min(1).nullable().optional(),
+}).strict()
+
+/** Query string of `GET /api/silipower/content-tasks`. */
+export const contentTaskListQuerySchema = z.object({
+  projectId: z.string().min(1).optional(),
+  status: taskStatusSchema.optional(),
+})
+
+/** Body of `POST /api/silipower/publish-records`. */
+export const publishRecordCreateSchema = z.object({
+  platform: z.string().min(1),
+  materialId: z.string().min(1),
+  accountId: z.string().min(1).optional(),
+  projectId: z.string().min(1).nullable().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/publish-records/:id`. */
+export const publishRecordPatchSchema = z.object({
+  status: publishStatusSchema.optional(),
+  accountId: z.string().min(1).optional(),
+}).strict()
+
+/** Query string of `GET /api/silipower/publish-records`. */
+export const publishRecordListQuerySchema = z.object({
+  projectId: z.string().min(1).optional(),
+  status: publishStatusSchema.optional(),
+})
+
 /**
  * Error codes every Silipower endpoint may return.
  *
@@ -77,6 +128,7 @@ export const silipowerErrorCodeSchema = z.enum([
   'AUTH_REQUIRED',
   'FORBIDDEN',
   'NOT_FOUND',
+  'INVALID_TRANSITION',
   'SKILL_UNAVAILABLE',
   'INTERNAL_ERROR',
 ])
@@ -105,6 +157,30 @@ export type MaterialPatchInput = z.infer<typeof materialPatchSchema>
 
 /** Query string of `GET /api/silipower/materials`. */
 export type MaterialListQuery = z.infer<typeof materialListQuerySchema>
+
+/** A content task or work-plan task status. */
+export type TaskStatus = z.infer<typeof taskStatusSchema>
+
+/** A publish record status. */
+export type PublishStatus = z.infer<typeof publishStatusSchema>
+
+/** Body of `POST /api/silipower/content-tasks`. */
+export type ContentTaskCreateInput = z.infer<typeof contentTaskCreateSchema>
+
+/** Body of `PATCH /api/silipower/content-tasks/:id`. */
+export type ContentTaskPatchInput = z.infer<typeof contentTaskPatchSchema>
+
+/** Query string of `GET /api/silipower/content-tasks`. */
+export type ContentTaskListQuery = z.infer<typeof contentTaskListQuerySchema>
+
+/** Body of `POST /api/silipower/publish-records`. */
+export type PublishRecordCreateInput = z.infer<typeof publishRecordCreateSchema>
+
+/** Body of `PATCH /api/silipower/publish-records/:id`. */
+export type PublishRecordPatchInput = z.infer<typeof publishRecordPatchSchema>
+
+/** Query string of `GET /api/silipower/publish-records`. */
+export type PublishRecordListQuery = z.infer<typeof publishRecordListQuerySchema>
 
 /** A Silipower error code. */
 export type SilipowerErrorCode = z.infer<typeof silipowerErrorCodeSchema>

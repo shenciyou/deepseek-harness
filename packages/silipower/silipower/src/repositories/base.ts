@@ -1,3 +1,4 @@
+import type { ZodError } from 'zod'
 import type { RequestScope } from '../auth.ts'
 import { failure } from '../errors.ts'
 
@@ -144,6 +145,21 @@ export class ScopedRepository<T extends OwnedRecord> {
     await this.options.table.delete(id)
     await this.options.onWrite('remove', this.options.resource, current, scope)
   }
+}
+
+/**
+ * Turn a Zod failure into the wire's `VALIDATION_ERROR`.
+ *
+ * Shared by every repository so the message format cannot drift between
+ * resources; the `path: message` join is what a client shows for a bad field.
+ * @param error - The failed parse.
+ * @returns the failure, ready to throw.
+ */
+export function validationFailure(error: ZodError): ReturnType<typeof failure> {
+  return failure(
+    'VALIDATION_ERROR',
+    error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+  )
 }
 
 /**

@@ -14,6 +14,7 @@ export const HTTP_STATUS: Record<SilipowerErrorCode, number> = {
   AUTH_REQUIRED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
+  INVALID_TRANSITION: 409,
   SKILL_UNAVAILABLE: 503,
   INTERNAL_ERROR: 500,
 }

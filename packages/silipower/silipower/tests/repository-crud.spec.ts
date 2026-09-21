@@ -5,7 +5,7 @@ import { ProjectRepository } from '../src/repositories/project-repository.ts'
 import { PublishRecordRepository } from '../src/repositories/publish-record-repository.ts'
 import { ScopedRepository, newestFirst, type OwnedRecord } from '../src/repositories/base.ts'
 import { memoryTable } from './helpers/memory-table.ts'
-import { auditTable, repositoryHarness } from './helpers/repository-harness.ts'
+import { auditTable, materialLookup, materialSummary, repositoryHarness } from './helpers/repository-harness.ts'
 
 const ORG_A = 'org_a'
 const ORG_B = 'org_b'
@@ -24,7 +24,13 @@ function publishRepository() {
   const h = repositoryHarness()
   return {
     h,
-    repository: new PublishRecordRepository({ table: memoryTable(), now: h.now, newId: h.newId, onWrite: h.onWrite }),
+    repository: new PublishRecordRepository({
+      table: memoryTable(),
+      now: h.now,
+      newId: h.newId,
+      onWrite: h.onWrite,
+      materials: materialLookup([materialSummary('mat_1')]),
+    }),
   }
 }
 

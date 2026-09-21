@@ -1,4 +1,3 @@
-import type { ZodError } from 'zod'
 import type { RequestScope } from '../auth.ts'
 import {
   materialCreateSchema,
@@ -8,7 +7,7 @@ import {
 } from '../contracts.ts'
 import { failure } from '../errors.ts'
 import type { Material } from '../spec.ts'
-import { ScopedRepository, type KvLike, type WriteObserver } from './base.ts'
+import { ScopedRepository, validationFailure, type KvLike, type WriteObserver } from './base.ts'
 
 /** Fields a caller may supply when creating a material. */
 export type MaterialInput = MaterialCreateInput
@@ -178,16 +177,4 @@ function encodeCursor(id: string): string {
  */
 function decodeCursor(cursor: string): string {
   return Buffer.from(cursor, 'base64url').toString('utf8')
-}
-
-/**
- * Turn a Zod failure into the wire's `VALIDATION_ERROR`.
- * @param error - The failed parse.
- * @returns the failure, ready to throw.
- */
-function validationFailure(error: ZodError): ReturnType<typeof failure> {
-  return failure(
-    'VALIDATION_ERROR',
-    error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
-  )
 }
