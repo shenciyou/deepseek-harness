@@ -7,6 +7,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { DEV_ACTORS_ENV, readHeader, type RequestHeaders } from './auth.ts'
+import { AuditLog } from './audit.ts'
 import {
   DEFAULT_GENERATION_MODEL,
   DEFAULT_GENERATION_PROVIDER,
@@ -16,7 +17,8 @@ import {
   type ProjectContext,
   type SkillPort,
 } from './generate.ts'
-import { corsHeaders, handleGenerateRequest, type GenerateOutcome } from './http.ts'
+import { corsHeaders, handleGenerateRequest, handleRoute, parseJsonBody, type GenerateOutcome, type RouteResponse } from './http.ts'
+import { MaterialRepository } from './repositories/material-repository.ts'
 import { silipowerDomainSpec } from './spec.ts'
 import type { Material } from './spec.ts'
 
@@ -67,6 +69,49 @@ function parseAllowedOrigins(raw: string | undefined): string[] {
     .split(',')
     .map(origin => origin.trim())
     .filter(origin => origin !== '')
+}
+
+const MATERIALS_PATH = '/api/silipower/materials'
+
+/**
+ * Read the material id off a request path.
+ * @param url - The raw request URL.
+ * @returns the id, or `undefined` when the path names the collection itself.
+ */
+function materialIdFromUrl(url: string | undefined): string | undefined {
+  const pathname = new URL(url ?? '/', 'http://x').pathname
+  if (!pathname.startsWith(`${MATERIALS_PATH}/`)) return undefined
+  const id = decodeURIComponent(pathname.slice(MATERIALS_PATH.length + 1))
+  return id === '' ? undefined : id
+}
+
+/**
+ * Read the list filters off the query string.
+ *
+ * The values stay strings here; the repository's schema is the one place that
+ * coerces and range-checks them, so an invalid `limit` is a `VALIDATION_ERROR`
+ * with the same shape as any other bad input.
+ * @param url - The raw request URL.
+ * @returns the raw filter values that were present.
+ */
+function materialQueryFrom(url: string | undefined): Record<string, string> {
+  const params = new URL(url ?? '/', 'http://x').searchParams
+  const query: Record<string, string> = {}
+  for (const key of ['projectId', 'type', 'cursor', 'limit']) {
+    const value = params.get(key)
+    if (value !== null) query[key] = value
+  }
+  return query
+}
+
+/**
+ * Write a route response produced by {@link handleRoute}.
+ * @param res - The response to write.
+ * @param response - The handler result.
+ */
+function writeRouteResponse(res: ServerResponse, response: RouteResponse): void {
+  res.writeHead(response.status, response.headers)
+  res.end(response.body === undefined ? undefined : JSON.stringify(response.body))
 }
 
 /**
@@ -163,6 +208,7 @@ export class SilipowerService extends TypertRemoteService {
   static inject = ['storageDomain', 'webServer', 'llm', 'web', 'skills', 'attachments', 'sessionQuery']
 
   private materials?: KvTable<string, Material>
+  private materialRepository?: MaterialRepository
   private generation?: GenerationService
 
   constructor(ctx: Context) {
@@ -173,6 +219,25 @@ export class SilipowerService extends TypertRemoteService {
     const domain = await this.ctx.storageDomain.open(silipowerDomainSpec)
     this.ctx.effect(() => async () => { await domain.close() }, 'silipower.domainClose')
     this.materials = domain.table('materials')
+
+    const audit = new AuditLog(domain.table('audit_events'), {
+      newId: () => randomUUID(),
+      now: () => new Date().toISOString(),
+    })
+    this.materialRepository = new MaterialRepository({
+      table: this.requireMaterials(),
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      onWrite: async (action, resource, record, scope) => {
+        await audit.write({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          resource,
+          resourceId: record.id,
+          action,
+        })
+      },
+    })
 
     this.generation = new GenerationService({
       llm: llmPort(this.ctx),
@@ -234,22 +299,32 @@ export class SilipowerService extends TypertRemoteService {
 
     const disposeMaterials = this.ctx.webServer.register({
       kind: 'prefix',
-      path: '/api/silipower/materials',
+      path: MATERIALS_PATH,
       handler: async (req, res) => {
-        if (req.method === 'OPTIONS') return preflight(req, res)
-        try {
-          if (req.method === 'GET') {
-            return reply(req, res, 200, { ok: true, value: await this.listMaterials() })
-          }
-          if (req.method === 'POST') {
-            const body = (await readJson(req)) as Material | undefined
-            if (body === undefined) return reply(req, res, 400, { ok: false, error: 'missing material body' })
-            return reply(req, res, 200, { ok: true, value: await this.saveMaterial(body) })
-          }
-          reply(req, res, 405, { ok: false, error: 'method not allowed' })
-        } catch (error) {
-          reply(req, res, 500, { ok: false, error: errorOf(error) })
-        }
+        const rawBody = await readRawBody(req)
+        const id = materialIdFromUrl(req.url)
+        // The method set depends on whether the path names one material, so the
+        // generic boundary still rejects a method the path does not accept.
+        const response = await handleRoute({
+          request: { method: req.method ?? 'GET', headers: req.headers as RequestHeaders },
+          allowedMethods: id === undefined ? ['GET', 'POST'] : ['GET', 'PATCH', 'DELETE'],
+          allowedOrigins: origins,
+          requestId: `req_${randomUUID()}`,
+          nodeEnv: process.env.NODE_ENV,
+          devActors: process.env[DEV_ACTORS_ENV],
+          handler: async ({ scope }) => {
+            const materials = this.requireMaterialRepository()
+            if (id === undefined) {
+              if (req.method === 'GET') return materials.query(scope, materialQueryFrom(req.url))
+              return materials.create(scope, parseJsonBody(rawBody))
+            }
+            if (req.method === 'GET') return materials.get(scope, id)
+            if (req.method === 'PATCH') return materials.patch(scope, id, parseJsonBody(rawBody))
+            await materials.remove(scope, id)
+            return { id }
+          },
+        })
+        writeRouteResponse(res, response)
       },
     })
 
@@ -420,6 +495,11 @@ export class SilipowerService extends TypertRemoteService {
   private requireGeneration(): GenerationService {
     if (this.generation === undefined) throw new Error('silipower generation service is not initialized')
     return this.generation
+  }
+
+  private requireMaterialRepository(): MaterialRepository {
+    if (this.materialRepository === undefined) throw new Error('silipower material repository is not initialized')
+    return this.materialRepository
   }
 
   private requireMaterials(): KvTable<string, Material> {

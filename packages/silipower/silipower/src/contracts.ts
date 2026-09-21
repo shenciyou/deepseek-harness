@@ -26,6 +26,43 @@ export const generateRequestSchema = z.object({
   materialIds: z.array(z.string().min(1)).max(20).optional(),
 })
 
+/** The kinds of reusable asset a material can be, as they appear on the wire. */
+export const materialTypeSchema = z.enum(['video', 'image', 'script', 'cover', 'tag'])
+
+/**
+ * Body of `POST /api/silipower/materials`.
+ *
+ * Strict on purpose. `id`, `organizationId`, the actor, and both timestamps are
+ * the server's to assign; a client that sends them is rejected rather than
+ * quietly ignored, so a client cannot believe it chose an owner.
+ */
+export const materialCreateSchema = z.object({
+  name: z.string().min(1),
+  type: materialTypeSchema,
+  category: z.string().optional(),
+  content: z.string().optional(),
+  url: z.string().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/materials/:id`: the create fields, all optional. */
+export const materialPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  type: materialTypeSchema.optional(),
+  category: z.string().optional(),
+  content: z.string().optional(),
+  url: z.string().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+}).strict()
+
+/** Query string of `GET /api/silipower/materials`. */
+export const materialListQuerySchema = z.object({
+  projectId: z.string().min(1).optional(),
+  type: materialTypeSchema.optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+
 /**
  * Error codes every Silipower endpoint may return.
  *
@@ -56,6 +93,18 @@ export type GenerateFunctionType = z.infer<typeof generateFunctionTypeSchema>
 
 /** Body of `POST /api/silipower/generate`. */
 export type GenerateRequest = z.infer<typeof generateRequestSchema>
+
+/** A kind of reusable asset. */
+export type MaterialType = z.infer<typeof materialTypeSchema>
+
+/** Body of `POST /api/silipower/materials`. */
+export type MaterialCreateInput = z.infer<typeof materialCreateSchema>
+
+/** Body of `PATCH /api/silipower/materials/:id`. */
+export type MaterialPatchInput = z.infer<typeof materialPatchSchema>
+
+/** Query string of `GET /api/silipower/materials`. */
+export type MaterialListQuery = z.infer<typeof materialListQuerySchema>
 
 /** A Silipower error code. */
 export type SilipowerErrorCode = z.infer<typeof silipowerErrorCodeSchema>

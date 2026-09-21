@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
-import { generateFunctionTypeSchema } from './contracts.ts'
+import { generateFunctionTypeSchema, materialTypeSchema } from './contracts.ts'
 
 /**
  * Silipower durable domain, version 1.
@@ -98,9 +98,6 @@ export const projectSchema = z.object({
   category: z.string(),
   status: z.enum(['active', 'archived']),
 })
-
-/** What a material is, used to filter the library. */
-export const materialTypeSchema = z.enum(['video', 'image', 'script', 'cover', 'tag'])
 
 /** A reusable asset: a script, a cover, a tag set, or media. */
 export const materialSchema = z.object({

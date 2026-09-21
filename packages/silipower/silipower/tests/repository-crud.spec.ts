@@ -3,7 +3,7 @@ import { AuditLog } from '../src/audit.ts'
 import { MaterialRepository } from '../src/repositories/material-repository.ts'
 import { ProjectRepository } from '../src/repositories/project-repository.ts'
 import { PublishRecordRepository } from '../src/repositories/publish-record-repository.ts'
-import { newestFirst, type OwnedRecord } from '../src/repositories/base.ts'
+import { ScopedRepository, newestFirst, type OwnedRecord } from '../src/repositories/base.ts'
 import { memoryTable } from './helpers/memory-table.ts'
 import { auditTable, repositoryHarness } from './helpers/repository-harness.ts'
 
@@ -54,6 +54,45 @@ describe('newestFirst', () => {
   it('breaks an updatedAt tie by descending id, in both argument orders', () => {
     expect(newestFirst(stub('b', 't1'), stub('a', 't1'))).toBe(-1)
     expect(newestFirst(stub('a', 't1'), stub('b', 't1'))).toBe(1)
+  })
+})
+
+describe('ScopedRepository identity guard', () => {
+  // The resource repositories validate their own inputs, so this guard can no
+  // longer be reached through one of them. It is still the last line of defence
+  // for the base class, so it gets pinned directly rather than left untested.
+  function base() {
+    const h = repositoryHarness()
+    return {
+      h,
+      repository: new ScopedRepository<OwnedRecord>({
+        resource: 'thing',
+        table: memoryTable(),
+        now: h.now,
+        newId: h.newId,
+        onWrite: h.onWrite,
+      }),
+    }
+  }
+
+  it('refuses a mutation that moves the record to another id', async () => {
+    const { repository } = base()
+    const created = await repository.create(scopeA, record => record)
+
+    await expect(repository.patch(scopeA, created.id, current => ({ ...current, id: 'other' }))).rejects.toThrowError(
+      expect.objectContaining({ code: 'VALIDATION_ERROR' }),
+    )
+    expect(repository.get(scopeA, created.id).id).toBe(created.id)
+  })
+
+  it('refuses a mutation that moves the record to another organization', async () => {
+    const { repository } = base()
+    const created = await repository.create(scopeA, record => record)
+
+    await expect(
+      repository.patch(scopeA, created.id, current => ({ ...current, organizationId: ORG_B })),
+    ).rejects.toThrowError(expect.objectContaining({ code: 'VALIDATION_ERROR' }))
+    expect(repository.get(scopeA, created.id).organizationId).toBe(ORG_A)
   })
 })
 
