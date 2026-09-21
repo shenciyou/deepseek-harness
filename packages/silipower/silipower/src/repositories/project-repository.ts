@@ -1,14 +1,15 @@
 import type { RequestScope } from '../auth.ts'
+import {
+  projectCreateSchema,
+  projectPatchSchema,
+  type ProjectCreateInput,
+} from '../contracts.ts'
 import { failure } from '../errors.ts'
-import { projectSchema, type Project } from '../spec.ts'
-import { ScopedRepository, type KvLike, type WriteObserver } from './base.ts'
+import type { Project } from '../spec.ts'
+import { ScopedRepository, validationFailure, type KvLike, type WriteObserver } from './base.ts'
 
 /** Fields a caller may supply when creating a project. */
-export interface ProjectInput {
-  readonly name: string
-  readonly description: string
-  readonly category: string
-}
+export type ProjectInput = ProjectCreateInput
 
 /** What the project repository needs from its owner. */
 export interface ProjectRepositoryOptions {
@@ -23,7 +24,8 @@ export interface ProjectRepositoryOptions {
  *
  * A project is the boundary the rest of the domain hangs off, so it is
  * deliberately organization-wide: `projectId` is null on a project record
- * itself, and everything else points at it.
+ * itself, and everything else points at it. As with the other resource
+ * repositories, the write bodies are strict and validated here.
  */
 export class ProjectRepository {
   private readonly base: ScopedRepository<Project>
@@ -57,28 +59,40 @@ export class ProjectRepository {
   /**
    * Create an active project.
    * @param scope - The acting scope.
-   * @param input - The caller-supplied fields.
+   * @param input - The caller-supplied fields, unvalidated.
    * @returns the stored project.
+   * @throws SilipowerFailure `VALIDATION_ERROR` for a body the contract rejects.
    */
-  async create(scope: RequestScope, input: ProjectInput): Promise<Project> {
-    return this.base.create(scope, base =>
-      parseProject({ ...base, ...input, status: 'active' }),
-    )
+  async create(scope: RequestScope, input: unknown): Promise<Project> {
+    const parsed = projectCreateSchema.safeParse(input)
+    if (!parsed.success) throw validationFailure(parsed.error)
+    const fields = parsed.data
+    return this.base.create(scope, base => ({
+      ...base,
+      name: fields.name,
+      description: fields.description ?? '',
+      category: fields.category ?? '',
+      status: 'active',
+    }))
   }
 
   /**
    * Update a project.
    * @param scope - The acting scope.
    * @param id - The project id.
-   * @param input - The fields to change.
+   * @param input - The fields to change, unvalidated.
    * @returns the stored project.
+   * @throws SilipowerFailure `VALIDATION_ERROR` for a body the contract rejects.
    */
-  async patch(
-    scope: RequestScope,
-    id: string,
-    input: Partial<ProjectInput> & { status?: Project['status'] },
-  ): Promise<Project> {
-    return this.base.patch(scope, id, current => parseProject({ ...current, ...input }))
+  async patch(scope: RequestScope, id: string, input: unknown): Promise<Project> {
+    const parsed = projectPatchSchema.safeParse(input)
+    if (!parsed.success) throw validationFailure(parsed.error)
+    const changes = parsed.data
+    if (Object.keys(changes).length === 0) {
+      throw failure('VALIDATION_ERROR', 'patch must change at least one field')
+    }
+    // Zod omits absent optional keys, so a present key is a real value.
+    return this.base.patch(scope, id, current => ({ ...current, ...changes }) as Project)
   }
 
   /**
@@ -89,15 +103,4 @@ export class ProjectRepository {
   async remove(scope: RequestScope, id: string): Promise<void> {
     await this.base.remove(scope, id)
   }
-}
-
-function parseProject(candidate: unknown): Project {
-  const parsed = projectSchema.safeParse(candidate)
-  if (!parsed.success) {
-    throw failure(
-      'VALIDATION_ERROR',
-      parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
-    )
-  }
-  return parsed.data
 }

@@ -19,6 +19,7 @@ import {
 } from './generate.ts'
 import { corsHeaders, handleGenerateRequest, handleRoute, parseJsonBody, type GenerateOutcome, type RouteResponse } from './http.ts'
 import { MaterialRepository } from './repositories/material-repository.ts'
+import { ProjectContextRepository } from './repositories/project-context-repository.ts'
 import { PublishRecordRepository } from './repositories/publish-record-repository.ts'
 import { TaskRepository } from './repositories/task-repository.ts'
 import type { AuditAction } from './repositories/base.ts'
@@ -77,6 +78,12 @@ function parseAllowedOrigins(raw: string | undefined): string[] {
 const MATERIALS_PATH = '/api/silipower/materials'
 const CONTENT_TASKS_PATH = '/api/silipower/content-tasks'
 const PUBLISH_RECORDS_PATH = '/api/silipower/publish-records'
+const PROJECTS_PATH = '/api/silipower/projects'
+const COMPANY_PATH = '/api/silipower/company'
+const FOUNDER_PATH = '/api/silipower/founder'
+
+/** A handler may answer synchronously or after a read. */
+type MaybePromise<T> = T | Promise<T>
 
 /**
  * The CRUD surface every scoped resource repository exposes to the router.
@@ -85,11 +92,20 @@ const PUBLISH_RECORDS_PATH = '/api/silipower/publish-records'
  * repository keeps its own narrower return types and still registers here.
  */
 interface ResourceRepository {
-  query(scope: RequestScope, rawQuery: unknown): { readonly items: readonly unknown[]; readonly nextCursor?: string }
+  query(
+    scope: RequestScope,
+    rawQuery: unknown,
+  ): MaybePromise<{ readonly items: readonly unknown[]; readonly nextCursor?: string }>
   get(scope: RequestScope, id: string): unknown
   create(scope: RequestScope, input: unknown): Promise<unknown>
   patch(scope: RequestScope, id: string, input: unknown): Promise<unknown>
   remove(scope: RequestScope, id: string): Promise<void>
+}
+
+/** The read/write surface of an organization singleton (company, founder). */
+interface SingletonResource {
+  get(scope: RequestScope): unknown
+  upsert(scope: RequestScope, input: unknown): Promise<unknown>
 }
 
 /**
@@ -229,6 +245,7 @@ export class SilipowerService extends TypertRemoteService {
   private materialRepository?: MaterialRepository
   private publishRecordRepository?: PublishRecordRepository
   private taskRepository?: TaskRepository
+  private projectContext?: ProjectContextRepository
   private generation?: GenerationService
 
   constructor(ctx: Context) {
@@ -276,6 +293,11 @@ export class SilipowerService extends TypertRemoteService {
       now: () => new Date().toISOString(),
       newId: () => randomUUID(),
       onWrite,
+    })
+    this.projectContext = new ProjectContextRepository({
+      company: { table: domain.table('companies'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
+      founder: { table: domain.table('founders'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
+      projects: { table: domain.table('projects'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
     })
 
     this.generation = new GenerationService({
@@ -336,7 +358,11 @@ export class SilipowerService extends TypertRemoteService {
       },
     })
 
-    const registerResource = (basePath: string, repository: () => ResourceRepository): (() => void) =>
+    const registerResource = (
+      basePath: string,
+      repository: () => ResourceRepository,
+      options: { readonly allowDelete?: boolean } = {},
+    ): (() => void) =>
       this.ctx.webServer.register({
         kind: 'prefix',
         path: basePath,
@@ -345,9 +371,11 @@ export class SilipowerService extends TypertRemoteService {
           const id = resourceIdFromUrl(basePath, req.url)
           // The method set depends on whether the path names one record, so the
           // generic boundary still rejects a method the path does not accept.
+          const itemMethods =
+            options.allowDelete === false ? ['GET', 'PATCH'] : ['GET', 'PATCH', 'DELETE']
           const response = await handleRoute({
             request: { method: req.method ?? 'GET', headers: req.headers as RequestHeaders },
-            allowedMethods: id === undefined ? ['GET', 'POST'] : ['GET', 'PATCH', 'DELETE'],
+            allowedMethods: id === undefined ? ['GET', 'POST'] : itemMethods,
             allowedOrigins: origins,
             requestId: `req_${randomUUID()}`,
             nodeEnv: process.env.NODE_ENV,
@@ -368,12 +396,55 @@ export class SilipowerService extends TypertRemoteService {
         },
       })
 
+    /** A route for a value that exists once per organization. */
+    const registerSingleton = (basePath: string, resource: () => SingletonResource): (() => void) =>
+      this.ctx.webServer.register({
+        kind: 'exact',
+        path: basePath,
+        handler: async (req, res) => {
+          const rawBody = await readRawBody(req)
+          const response = await handleRoute({
+            request: { method: req.method ?? 'GET', headers: req.headers as RequestHeaders },
+            allowedMethods: ['GET', 'PATCH'],
+            allowedOrigins: origins,
+            requestId: `req_${randomUUID()}`,
+            nodeEnv: process.env.NODE_ENV,
+            devActors: process.env[DEV_ACTORS_ENV],
+            handler: async ({ scope }) => {
+              const singleton = resource()
+              // `null` rather than an error: the caller renders an empty form.
+              if (req.method === 'GET') return singleton.get(scope) ?? null
+              return singleton.upsert(scope, parseJsonBody(rawBody))
+            },
+          })
+          writeRouteResponse(res, response)
+        },
+      })
+
     const disposeMaterials = registerResource(MATERIALS_PATH, () => this.requireMaterialRepository())
     const disposeTasks = registerResource(CONTENT_TASKS_PATH, () => this.requireTaskRepository())
     const disposePublishRecords = registerResource(
       PUBLISH_RECORDS_PATH,
       () => this.requirePublishRecordRepository(),
     )
+    const disposeProjects = registerResource(
+      PROJECTS_PATH,
+      () => {
+        const context = this.requireProjectContext()
+        return {
+          // Listing provisions the organization's default project, so the app
+          // always has a boundary to hang content off.
+          query: async (scope: RequestScope) => ({ items: await context.listProjects(scope) }),
+          get: (scope, id) => context.projects.get(scope, id),
+          create: (scope, input) => context.projects.create(scope, input),
+          patch: (scope, id, input) => context.projects.patch(scope, id, input),
+          remove: (scope, id) => context.projects.remove(scope, id),
+        }
+      },
+      { allowDelete: false },
+    )
+    const disposeCompany = registerSingleton(COMPANY_PATH, () => this.requireProjectContext().company)
+    const disposeFounder = registerSingleton(FOUNDER_PATH, () => this.requireProjectContext().founder)
 
     const disposeStats = this.ctx.webServer.register({
       kind: 'exact',
@@ -476,6 +547,9 @@ export class SilipowerService extends TypertRemoteService {
       disposeMaterials()
       disposeTasks()
       disposePublishRecords()
+      disposeProjects()
+      disposeCompany()
+      disposeFounder()
       disposeStats()
       disposeSearch()
       disposeSkills()
@@ -561,6 +635,11 @@ export class SilipowerService extends TypertRemoteService {
   private requireTaskRepository(): TaskRepository {
     if (this.taskRepository === undefined) throw new Error('silipower task repository is not initialized')
     return this.taskRepository
+  }
+
+  private requireProjectContext(): ProjectContextRepository {
+    if (this.projectContext === undefined) throw new Error('silipower project context is not initialized')
+    return this.projectContext
   }
 
   private requireMaterials(): KvTable<string, Material> {

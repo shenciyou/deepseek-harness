@@ -114,6 +114,49 @@ export const publishRecordListQuerySchema = z.object({
   status: publishStatusSchema.optional(),
 })
 
+/** Lifecycle of a project. */
+export const projectStatusSchema = z.enum(['active', 'archived'])
+
+/**
+ * Body of `PATCH /api/silipower/company`.
+ *
+ * The company profile is an organization singleton, so there is no id in the
+ * path and the first patch may create it.
+ */
+export const companyPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  businessScope: z.array(z.string()).optional(),
+  advantages: z.array(z.string()).optional(),
+  slogan: z.string().optional(),
+  pricingInfo: z.string().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/founder`, also an organization singleton. */
+export const founderPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  resume: z.string().optional(),
+  personaTags: z.array(z.string()).optional(),
+  personalStory: z.string().optional(),
+  goldenQuotes: z.array(z.string()).optional(),
+  speakingStyle: z.string().optional(),
+}).strict()
+
+/** Body of `POST /api/silipower/projects`. */
+export const projectCreateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  category: z.string().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/projects/:id`. */
+export const projectPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  status: projectStatusSchema.optional(),
+}).strict()
+
 /**
  * Error codes every Silipower endpoint may return.
  *
@@ -181,6 +224,21 @@ export type PublishRecordPatchInput = z.infer<typeof publishRecordPatchSchema>
 
 /** Query string of `GET /api/silipower/publish-records`. */
 export type PublishRecordListQuery = z.infer<typeof publishRecordListQuerySchema>
+
+/** A project status. */
+export type ProjectStatus = z.infer<typeof projectStatusSchema>
+
+/** Body of `PATCH /api/silipower/company`. */
+export type CompanyPatchInput = z.infer<typeof companyPatchSchema>
+
+/** Body of `PATCH /api/silipower/founder`. */
+export type FounderPatchInput = z.infer<typeof founderPatchSchema>
+
+/** Body of `POST /api/silipower/projects`. */
+export type ProjectCreateInput = z.infer<typeof projectCreateSchema>
+
+/** Body of `PATCH /api/silipower/projects/:id`. */
+export type ProjectPatchInput = z.infer<typeof projectPatchSchema>
 
 /** A Silipower error code. */
 export type SilipowerErrorCode = z.infer<typeof silipowerErrorCodeSchema>

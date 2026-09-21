@@ -3,6 +3,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   generateFunctionTypeSchema,
   materialTypeSchema,
+  projectStatusSchema,
   publishStatusSchema,
   taskStatusSchema,
 } from './contracts.ts'
@@ -95,7 +96,7 @@ export const projectSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   category: z.string(),
-  status: z.enum(['active', 'archived']),
+  status: projectStatusSchema,
 })
 
 /** A reusable asset: a script, a cover, a tag set, or media. */
