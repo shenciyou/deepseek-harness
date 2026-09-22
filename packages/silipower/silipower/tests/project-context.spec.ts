@@ -6,8 +6,8 @@ import {
 import { memoryTable } from './helpers/memory-table.ts'
 import { repositoryHarness } from './helpers/repository-harness.ts'
 
-const scopeA = { organizationId: 'org_a', actorId: 'actor_a' }
-const scopeB = { organizationId: 'org_b', actorId: 'actor_b' }
+const scopeA = { organizationId: 'org_a', actorId: 'actor_a', projectId: null }
+const scopeB = { organizationId: 'org_b', actorId: 'actor_b', projectId: null }
 
 const validationError = expect.objectContaining({ code: 'VALIDATION_ERROR' })
 const notFound = expect.objectContaining({ code: 'NOT_FOUND' })

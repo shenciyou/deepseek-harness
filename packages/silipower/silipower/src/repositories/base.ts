@@ -57,7 +57,7 @@ export class ScopedRepository<T extends OwnedRecord> {
   /**
    * @param options - Table, clock, id source, and the audit hook.
    */
-  constructor(private readonly options: RepositoryOptions<T>) {}
+  constructor(protected readonly options: RepositoryOptions<T>) {}
 
   /**
    * Every record the caller owns, newest first.
@@ -160,6 +160,43 @@ export function validationFailure(error: ZodError): ReturnType<typeof failure> {
     'VALIDATION_ERROR',
     error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
   )
+}
+
+/**
+ * CRUD over records that also belong to one project.
+ *
+ * An organization boundary is not enough once projects exist: switching
+ * projects must hide everything the previous one held, so every read filters on
+ * both. A record from another project answers `NOT_FOUND`, exactly like one from
+ * another organization — the caller learns nothing about where it lives.
+ */
+export class ProjectScopedRepository<T extends OwnedRecord> extends ScopedRepository<T> {
+  /**
+   * Every owned record in one project, newest first.
+   * @param scope - The acting scope.
+   * @param projectId - The acting project.
+   * @returns the records.
+   */
+  listInProject(scope: RequestScope, projectId: string): T[] {
+    return this.list(scope).filter(record => record.projectId === projectId)
+  }
+
+  /**
+   * One owned record in one project.
+   * @param scope - The acting scope.
+   * @param projectId - The acting project.
+   * @param id - The record id.
+   * @returns the record.
+   * @throws SilipowerFailure `NOT_FOUND` when absent, another organization's, or
+   * another project's.
+   */
+  getInProject(scope: RequestScope, projectId: string, id: string): T {
+    const record = this.get(scope, id)
+    if (record.projectId !== projectId) {
+      throw failure('NOT_FOUND', `${this.options.resource} ${id} not found`)
+    }
+    return record
+  }
 }
 
 /**

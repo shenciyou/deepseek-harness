@@ -24,6 +24,14 @@ export const generateRequestSchema = z.object({
   additionalRequirements: z.string().trim().max(4_000).optional(),
   projectId: z.string().min(1).optional(),
   materialIds: z.array(z.string().min(1)).max(20).optional(),
+  /**
+   * Background the caller folded in: company, founder, accounts, competitors.
+   *
+   * Capped here rather than trusted from the client, because it is pasted into
+   * the prompt and an unbounded field is both a cost and a context-overflow
+   * hazard.
+   */
+  context: z.string().trim().max(8_000).optional(),
 })
 
 /** The kinds of reusable asset a material can be, as they appear on the wire. */
@@ -157,6 +165,60 @@ export const projectPatchSchema = z.object({
   status: projectStatusSchema.optional(),
 }).strict()
 
+/** Which way a competitor's numbers moved. */
+export const dataTrendSchema = z.enum(['up', 'down', 'flat'])
+
+/** Body of `POST /api/silipower/accounts`. */
+export const accountCreateSchema = z.object({
+  accountName: z.string().min(1),
+  platform: z.string().min(1),
+  accountUrl: z.string().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/accounts/:id`. */
+export const accountPatchSchema = z.object({
+  accountName: z.string().min(1).optional(),
+  platform: z.string().min(1).optional(),
+  accountUrl: z.string().optional(),
+}).strict()
+
+/** Body of `POST /api/silipower/competitors`. */
+export const competitorCreateSchema = z.object({
+  accountName: z.string().min(1),
+  latestWork: z.string().optional(),
+  dataTrend: dataTrendSchema.optional(),
+  followers: z.number().int().nonnegative().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/competitors/:id`. */
+export const competitorPatchSchema = z.object({
+  accountName: z.string().min(1).optional(),
+  latestWork: z.string().optional(),
+  dataTrend: dataTrendSchema.optional(),
+  followers: z.number().int().nonnegative().optional(),
+}).strict()
+
+/** Body of `POST /api/silipower/account-plans`. */
+export const accountPlanCreateSchema = z.object({
+  name: z.string().min(1),
+  track: z.string().min(1),
+  platforms: z.array(z.string().min(1)).min(1),
+  audience: z.string().optional(),
+  accountType: z.string().min(1),
+  content: z.string().min(1),
+  generationRunId: z.string().min(1).optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/account-plans/:id`. */
+export const accountPlanPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  track: z.string().min(1).optional(),
+  platforms: z.array(z.string().min(1)).min(1).optional(),
+  audience: z.string().optional(),
+  accountType: z.string().min(1).optional(),
+  content: z.string().min(1).optional(),
+}).strict()
+
 /**
  * Error codes every Silipower endpoint may return.
  *
@@ -239,6 +301,27 @@ export type ProjectCreateInput = z.infer<typeof projectCreateSchema>
 
 /** Body of `PATCH /api/silipower/projects/:id`. */
 export type ProjectPatchInput = z.infer<typeof projectPatchSchema>
+
+/** A competitor's data trend. */
+export type DataTrend = z.infer<typeof dataTrendSchema>
+
+/** Body of `POST /api/silipower/accounts`. */
+export type AccountCreateInput = z.infer<typeof accountCreateSchema>
+
+/** Body of `PATCH /api/silipower/accounts/:id`. */
+export type AccountPatchInput = z.infer<typeof accountPatchSchema>
+
+/** Body of `POST /api/silipower/competitors`. */
+export type CompetitorCreateInput = z.infer<typeof competitorCreateSchema>
+
+/** Body of `PATCH /api/silipower/competitors/:id`. */
+export type CompetitorPatchInput = z.infer<typeof competitorPatchSchema>
+
+/** Body of `POST /api/silipower/account-plans`. */
+export type AccountPlanCreateInput = z.infer<typeof accountPlanCreateSchema>
+
+/** Body of `PATCH /api/silipower/account-plans/:id`. */
+export type AccountPlanPatchInput = z.infer<typeof accountPlanPatchSchema>
 
 /** A Silipower error code. */
 export type SilipowerErrorCode = z.infer<typeof silipowerErrorCodeSchema>

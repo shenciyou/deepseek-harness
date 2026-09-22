@@ -6,13 +6,25 @@ export const ACTOR_HEADER = 'x-silipower-actor'
 /** Header naming the organization the actor claims to act within. */
 export const ORGANIZATION_HEADER = 'x-silipower-organization'
 
+/**
+ * Header naming the project the actor is working in.
+ *
+ * A project is the data boundary for accounts, competitors and plans, so the
+ * server has to be told which one a request acts in. It is optional here and
+ * required by the routes that are project-scoped: a route that needs it fails
+ * closed rather than silently reading every project in the organization.
+ */
+export const PROJECT_HEADER = 'x-silipower-project'
+
 /** Environment variable holding the dev actor allow list. */
 export const DEV_ACTORS_ENV = 'SILIPOWER_DEV_ACTORS'
 
-/** Who is acting, and inside which organization. */
+/** Who is acting, and inside which organization and project. */
 export interface RequestScope {
   readonly organizationId: string
   readonly actorId: string
+  /** The acting project, or `null` when the request named no project. */
+  readonly projectId: string | null
 }
 
 /** The headers a request may carry. */
@@ -86,7 +98,21 @@ export function resolveScope(input: {
     throw failure('FORBIDDEN', `actor ${actorId} does not belong to organization ${claimed}`)
   }
 
-  return { organizationId, actorId }
+  return { organizationId, actorId, projectId: readHeader(input.headers, PROJECT_HEADER) ?? null }
+}
+
+/**
+ * The project a project-scoped route must act in.
+ * @param scope - The resolved scope.
+ * @returns the project id.
+ * @throws SilipowerFailure `VALIDATION_ERROR` when the request named none, so a
+ * caller cannot read or write across every project by omitting the header.
+ */
+export function requireProjectId(scope: RequestScope): string {
+  if (scope.projectId === null) {
+    throw failure('VALIDATION_ERROR', `${PROJECT_HEADER} is required`)
+  }
+  return scope.projectId
 }
 
 /**

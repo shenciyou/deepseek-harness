@@ -3,8 +3,8 @@ import { MaterialRepository } from '../src/repositories/material-repository.ts'
 import { memoryTable } from './helpers/memory-table.ts'
 import { repositoryHarness } from './helpers/repository-harness.ts'
 
-const scopeA = { organizationId: 'org_a', actorId: 'actor_a' }
-const scopeB = { organizationId: 'org_b', actorId: 'actor_b' }
+const scopeA = { organizationId: 'org_a', actorId: 'actor_a', projectId: 'prj_1' }
+const scopeB = { organizationId: 'org_b', actorId: 'actor_b', projectId: 'prj_1' }
 
 function materials() {
   const h = repositoryHarness()

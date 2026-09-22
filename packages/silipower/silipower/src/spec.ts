@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import {
+  dataTrendSchema,
   generateFunctionTypeSchema,
   materialTypeSchema,
   projectStatusSchema,
@@ -157,7 +158,7 @@ export const competitorSchema = z.object({
   ...ownershipFields,
   accountName: z.string().min(1),
   latestWork: z.string(),
-  dataTrend: z.enum(['up', 'down', 'flat']),
+  dataTrend: dataTrendSchema,
   followers: z.number().int().nonnegative(),
   source: dataSourceSchema,
 })

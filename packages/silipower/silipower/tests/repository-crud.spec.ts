@@ -9,8 +9,8 @@ import { auditTable, materialLookup, materialSummary, repositoryHarness } from '
 
 const ORG_A = 'org_a'
 const ORG_B = 'org_b'
-const scopeA = { organizationId: ORG_A, actorId: 'actor_a' }
-const scopeB = { organizationId: ORG_B, actorId: 'actor_b' }
+const scopeA = { organizationId: ORG_A, actorId: 'actor_a', projectId: 'prj_1' }
+const scopeB = { organizationId: ORG_B, actorId: 'actor_b', projectId: 'prj_1' }
 
 function projectRepository() {
   const h = repositoryHarness()

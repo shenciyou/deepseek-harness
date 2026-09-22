@@ -116,6 +116,36 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('待检测文案')
     expect(prompt.toLowerCase()).toContain('no additional requirements')
   })
+
+  it('folds in background only when the caller supplied some', () => {
+    const withBackground = buildPrompt({
+      profile: GENERATION_PROFILES.account_planning,
+      request: {
+        functionType: 'account_planning',
+        inputContent: '美食账号',
+        context: '公司：示例科技\n账号：主号',
+      },
+      skillContent: 'skill body',
+      context,
+    })
+    expect(withBackground).toContain('## Background')
+    expect(withBackground).toContain('公司：示例科技')
+
+    // An empty section would just invite the model to invent something for it.
+    for (const contextValue of [undefined, '']) {
+      const without = buildPrompt({
+        profile: GENERATION_PROFILES.account_planning,
+        request: {
+          functionType: 'account_planning',
+          inputContent: '美食账号',
+          ...(contextValue === undefined ? {} : { context: contextValue }),
+        },
+        skillContent: 'skill body',
+        context,
+      })
+      expect(without).not.toContain('## Background')
+    }
+  })
 })
 
 describe('GenerationService.prepare', () => {

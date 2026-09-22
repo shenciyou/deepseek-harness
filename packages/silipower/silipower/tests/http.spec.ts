@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ACTOR_HEADER, ORGANIZATION_HEADER, parseDevActors } from '../src/auth.ts'
+import { ACTOR_HEADER, ORGANIZATION_HEADER, PROJECT_HEADER, parseDevActors, requireProjectId } from '../src/auth.ts'
 import { failure } from '../src/errors.ts'
 import { corsHeaders, errorResponse, handleRoute, parseJsonBody, type RouteInput, type RouteRequest } from '../src/http.ts'
 
@@ -98,7 +98,35 @@ describe('handleRoute authentication', () => {
   it('tells the handler which organisation and actor it acts for', async () => {
     const handler = vi.fn(async () => null)
     await handleRoute(route({ handler }))
-    expect(handler).toHaveBeenCalledWith({ scope: { organizationId: 'org_a', actorId: 'actor_a' }, requestId: 'req_test' })
+    expect(handler).toHaveBeenCalledWith({
+      scope: { organizationId: 'org_a', actorId: 'actor_a', projectId: null },
+      requestId: 'req_test',
+    })
+  })
+
+  it('carries the acting project into the scope', async () => {
+    const handler = vi.fn(async () => null)
+    await handleRoute(
+      route({
+        request: request({
+          headers: { [ACTOR_HEADER]: 'actor_a', [ORGANIZATION_HEADER]: 'org_a', [PROJECT_HEADER]: 'prj_1' },
+        }),
+        handler,
+      }),
+    )
+    expect(handler).toHaveBeenCalledWith({
+      scope: { organizationId: 'org_a', actorId: 'actor_a', projectId: 'prj_1' },
+      requestId: 'req_test',
+    })
+  })
+})
+
+describe('requireProjectId', () => {
+  it('refuses a scope that named no project', () => {
+    expect(() => requireProjectId({ organizationId: 'org_a', actorId: 'actor_a', projectId: null })).toThrowError(
+      expect.objectContaining({ code: 'VALIDATION_ERROR' }),
+    )
+    expect(requireProjectId({ organizationId: 'org_a', actorId: 'actor_a', projectId: 'prj_1' })).toBe('prj_1')
   })
 })
 

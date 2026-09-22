@@ -19,6 +19,9 @@ import {
 } from './generate.ts'
 import { corsHeaders, handleGenerateRequest, handleRoute, parseJsonBody, type GenerateOutcome, type RouteResponse } from './http.ts'
 import { MaterialRepository } from './repositories/material-repository.ts'
+import { AccountPlanRepository } from './repositories/account-plan-repository.ts'
+import { AccountRepository } from './repositories/account-repository.ts'
+import { CompetitorRepository } from './repositories/competitor-repository.ts'
 import { ProjectContextRepository } from './repositories/project-context-repository.ts'
 import { PublishRecordRepository } from './repositories/publish-record-repository.ts'
 import { TaskRepository } from './repositories/task-repository.ts'
@@ -81,6 +84,18 @@ const PUBLISH_RECORDS_PATH = '/api/silipower/publish-records'
 const PROJECTS_PATH = '/api/silipower/projects'
 const COMPANY_PATH = '/api/silipower/company'
 const FOUNDER_PATH = '/api/silipower/founder'
+const ACCOUNTS_PATH = '/api/silipower/accounts'
+const COMPETITORS_PATH = '/api/silipower/competitors'
+const ACCOUNT_PLANS_PATH = '/api/silipower/account-plans'
+
+/** A project-scoped resource: same CRUD, but listing is organization *and* project. */
+interface ProjectResourceRepository {
+  list(scope: RequestScope): readonly unknown[]
+  get(scope: RequestScope, id: string): unknown
+  create(scope: RequestScope, input: unknown): Promise<unknown>
+  patch(scope: RequestScope, id: string, input: unknown): Promise<unknown>
+  remove(scope: RequestScope, id: string): Promise<void>
+}
 
 /** A handler may answer synchronously or after a read. */
 type MaybePromise<T> = T | Promise<T>
@@ -246,6 +261,9 @@ export class SilipowerService extends TypertRemoteService {
   private publishRecordRepository?: PublishRecordRepository
   private taskRepository?: TaskRepository
   private projectContext?: ProjectContextRepository
+  private accountRepository?: AccountRepository
+  private competitorRepository?: CompetitorRepository
+  private accountPlanRepository?: AccountPlanRepository
   private generation?: GenerationService
 
   constructor(ctx: Context) {
@@ -298,6 +316,24 @@ export class SilipowerService extends TypertRemoteService {
       company: { table: domain.table('companies'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
       founder: { table: domain.table('founders'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
       projects: { table: domain.table('projects'), now: () => new Date().toISOString(), newId: () => randomUUID(), onWrite },
+    })
+    this.accountRepository = new AccountRepository({
+      table: domain.table('operation_accounts'),
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      onWrite,
+    })
+    this.competitorRepository = new CompetitorRepository({
+      table: domain.table('competitors'),
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      onWrite,
+    })
+    this.accountPlanRepository = new AccountPlanRepository({
+      table: domain.table('account_plans'),
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      onWrite,
     })
 
     this.generation = new GenerationService({
@@ -446,6 +482,27 @@ export class SilipowerService extends TypertRemoteService {
     const disposeCompany = registerSingleton(COMPANY_PATH, () => this.requireProjectContext().company)
     const disposeFounder = registerSingleton(FOUNDER_PATH, () => this.requireProjectContext().founder)
 
+    /** Adapt a project-scoped repository, whose listing is not paginated, to the router. */
+    const projectResource =
+      (repository: () => ProjectResourceRepository): (() => ResourceRepository) =>
+        () => ({
+          query: (scope: RequestScope) => ({ items: repository().list(scope) }),
+          get: (scope, id) => repository().get(scope, id),
+          create: (scope, input) => repository().create(scope, input),
+          patch: (scope, id, input) => repository().patch(scope, id, input),
+          remove: (scope, id) => repository().remove(scope, id),
+        })
+
+    const disposeAccounts = registerResource(ACCOUNTS_PATH, projectResource(() => this.requireAccountRepository()))
+    const disposeCompetitors = registerResource(
+      COMPETITORS_PATH,
+      projectResource(() => this.requireCompetitorRepository()),
+    )
+    const disposeAccountPlans = registerResource(
+      ACCOUNT_PLANS_PATH,
+      projectResource(() => this.requireAccountPlanRepository()),
+    )
+
     const disposeStats = this.ctx.webServer.register({
       kind: 'exact',
       path: '/api/silipower/stats',
@@ -550,6 +607,9 @@ export class SilipowerService extends TypertRemoteService {
       disposeProjects()
       disposeCompany()
       disposeFounder()
+      disposeAccounts()
+      disposeCompetitors()
+      disposeAccountPlans()
       disposeStats()
       disposeSearch()
       disposeSkills()
@@ -640,6 +700,25 @@ export class SilipowerService extends TypertRemoteService {
   private requireProjectContext(): ProjectContextRepository {
     if (this.projectContext === undefined) throw new Error('silipower project context is not initialized')
     return this.projectContext
+  }
+
+  private requireAccountRepository(): AccountRepository {
+    if (this.accountRepository === undefined) throw new Error('silipower account repository is not initialized')
+    return this.accountRepository
+  }
+
+  private requireCompetitorRepository(): CompetitorRepository {
+    if (this.competitorRepository === undefined) {
+      throw new Error('silipower competitor repository is not initialized')
+    }
+    return this.competitorRepository
+  }
+
+  private requireAccountPlanRepository(): AccountPlanRepository {
+    if (this.accountPlanRepository === undefined) {
+      throw new Error('silipower account plan repository is not initialized')
+    }
+    return this.accountPlanRepository
   }
 
   private requireMaterials(): KvTable<string, Material> {

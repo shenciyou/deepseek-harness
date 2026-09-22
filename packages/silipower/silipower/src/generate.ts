@@ -121,6 +121,13 @@ export function buildPrompt(input: {
     input.context.projectName === undefined
       ? `organization ${input.context.organizationId}`
       : `project ${input.context.projectName} (organization ${input.context.organizationId})`
+  // Background is optional and only present when the caller had organisation
+  // facts to fold in; an empty section would just invite the model to invent
+  // something to put in it.
+  const background =
+    input.request.context === undefined || input.request.context === ''
+      ? []
+      : ['', '## Background', input.request.context]
 
   return [
     `## Skill: ${input.profile.skillName}`,
@@ -137,6 +144,7 @@ export function buildPrompt(input: {
     '',
     '## Project context',
     project,
+    ...background,
   ].join('\n')
 }
 

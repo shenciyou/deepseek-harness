@@ -7,8 +7,8 @@ import { TASK_TRANSITIONS, TaskRepository } from '../src/repositories/task-repos
 import { memoryTable } from './helpers/memory-table.ts'
 import { materialLookup, materialSummary, repositoryHarness } from './helpers/repository-harness.ts'
 
-const scopeA = { organizationId: 'org_a', actorId: 'actor_a' }
-const scopeB = { organizationId: 'org_b', actorId: 'actor_b' }
+const scopeA = { organizationId: 'org_a', actorId: 'actor_a', projectId: 'prj_1' }
+const scopeB = { organizationId: 'org_b', actorId: 'actor_b', projectId: 'prj_1' }
 
 const validationError = expect.objectContaining({ code: 'VALIDATION_ERROR' })
 const invalidTransition = expect.objectContaining({ code: 'INVALID_TRANSITION' })

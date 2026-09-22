@@ -10,8 +10,8 @@ import { auditTable, materialLookup, materialSummary, repositoryHarness } from '
 const ORG_A = 'org_a'
 const ORG_B = 'org_b'
 
-const scopeA = { organizationId: ORG_A, actorId: 'actor_a' }
-const scopeB = { organizationId: ORG_B, actorId: 'actor_b' }
+const scopeA = { organizationId: ORG_A, actorId: 'actor_a', projectId: 'prj_1' }
+const scopeB = { organizationId: ORG_B, actorId: 'actor_b', projectId: 'prj_1' }
 
 function materials() {
   const h = repositoryHarness()
@@ -100,7 +100,7 @@ describe('ScopedRepository validation and ownership fields', () => {
   it('rejects a write whose scope has no organisation', async () => {
     const { repository } = materials()
     await expect(
-      repository.create({ organizationId: '', actorId: 'actor_a' }, { name: 'a', type: 'script', projectId: null }),
+      repository.create({ organizationId: '', actorId: 'actor_a', projectId: null }, { name: 'a', type: 'script', projectId: null }),
     ).rejects.toThrowError(expect.objectContaining({ code: 'VALIDATION_ERROR' }))
   })
 
