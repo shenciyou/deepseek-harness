@@ -6,8 +6,9 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import { DEV_ACTORS_ENV, readHeader, type RequestHeaders, type RequestScope } from './auth.ts'
+import { DEV_ACTORS_ENV, readHeader, requireProjectId, type RequestHeaders, type RequestScope } from './auth.ts'
 import { AuditLog } from './audit.ts'
+import { dashboardSnapshot } from './dashboard.ts'
 import {
   DEFAULT_GENERATION_MODEL,
   DEFAULT_GENERATION_PROVIDER,
@@ -23,6 +24,7 @@ import { AccountPlanRepository } from './repositories/account-plan-repository.ts
 import { AccountRepository } from './repositories/account-repository.ts'
 import { CompetitorRepository } from './repositories/competitor-repository.ts'
 import { ProjectContextRepository } from './repositories/project-context-repository.ts'
+import { WorkplanRepository } from './repositories/workplan-repository.ts'
 import { PublishRecordRepository } from './repositories/publish-record-repository.ts'
 import { TaskRepository } from './repositories/task-repository.ts'
 import type { AuditAction } from './repositories/base.ts'
@@ -87,6 +89,8 @@ const FOUNDER_PATH = '/api/silipower/founder'
 const ACCOUNTS_PATH = '/api/silipower/accounts'
 const COMPETITORS_PATH = '/api/silipower/competitors'
 const ACCOUNT_PLANS_PATH = '/api/silipower/account-plans'
+const WORKPLAN_PATH = '/api/silipower/workplan-tasks'
+const DASHBOARD_PATH = '/api/silipower/dashboard'
 
 /** A project-scoped resource: same CRUD, but listing is organization *and* project. */
 interface ProjectResourceRepository {
@@ -264,6 +268,7 @@ export class SilipowerService extends TypertRemoteService {
   private accountRepository?: AccountRepository
   private competitorRepository?: CompetitorRepository
   private accountPlanRepository?: AccountPlanRepository
+  private workplanRepository?: WorkplanRepository
   private generation?: GenerationService
 
   constructor(ctx: Context) {
@@ -331,6 +336,12 @@ export class SilipowerService extends TypertRemoteService {
     })
     this.accountPlanRepository = new AccountPlanRepository({
       table: domain.table('account_plans'),
+      now: () => new Date().toISOString(),
+      newId: () => randomUUID(),
+      onWrite,
+    })
+    this.workplanRepository = new WorkplanRepository({
+      table: domain.table('workplan_tasks'),
       now: () => new Date().toISOString(),
       newId: () => randomUUID(),
       onWrite,
@@ -502,6 +513,36 @@ export class SilipowerService extends TypertRemoteService {
       ACCOUNT_PLANS_PATH,
       projectResource(() => this.requireAccountPlanRepository()),
     )
+    const disposeWorkplan = registerResource(
+      WORKPLAN_PATH,
+      () => {
+        const workplan = this.requireWorkplanRepository()
+        return {
+          query: (scope: RequestScope, rawQuery: unknown) => ({ items: workplan.listWeek(scope, rawQuery) }),
+          get: (scope, id) => workplan.get(scope, id),
+          create: (scope, input) => workplan.create(scope, input),
+          patch: (scope, id, input) => workplan.patch(scope, id, input),
+          remove: (scope, id) => workplan.remove(scope, id),
+        }
+      },
+      { allowDelete: false },
+    )
+    const disposeDashboard = this.ctx.webServer.register({
+      kind: 'exact',
+      path: DASHBOARD_PATH,
+      handler: async (req, res) => {
+        const response = await handleRoute({
+          request: { method: req.method ?? 'GET', headers: req.headers as RequestHeaders },
+          allowedMethods: ['GET'],
+          allowedOrigins: origins,
+          requestId: `req_${randomUUID()}`,
+          nodeEnv: process.env.NODE_ENV,
+          devActors: process.env[DEV_ACTORS_ENV],
+          handler: async ({ scope }) => this.dashboard(scope),
+        })
+        writeRouteResponse(res, response)
+      },
+    })
 
     const disposeStats = this.ctx.webServer.register({
       kind: 'exact',
@@ -610,6 +651,8 @@ export class SilipowerService extends TypertRemoteService {
       disposeAccounts()
       disposeCompetitors()
       disposeAccountPlans()
+      disposeWorkplan()
+      disposeDashboard()
       disposeStats()
       disposeSearch()
       disposeSkills()
@@ -719,6 +762,32 @@ export class SilipowerService extends TypertRemoteService {
       throw new Error('silipower account plan repository is not initialized')
     }
     return this.accountPlanRepository
+  }
+
+  private requireWorkplanRepository(): WorkplanRepository {
+    if (this.workplanRepository === undefined) {
+      throw new Error('silipower workplan repository is not initialized')
+    }
+    return this.workplanRepository
+  }
+
+  /**
+   * One project's headline numbers.
+   * @param scope - The acting scope, including the project.
+   * @returns the snapshot.
+   */
+  private async dashboard(scope: RequestScope): Promise<ReturnType<typeof dashboardSnapshot>> {
+    const projectId = requireProjectId(scope)
+    const [materials, publishRecords, accounts, tasks] = await Promise.all([
+      this.requireMaterialRepository().query(scope, { projectId }),
+      this.requirePublishRecordRepository().query(scope, { projectId }),
+      Promise.resolve(this.requireAccountRepository().list(scope)),
+      Promise.resolve(this.requireWorkplanRepository().all(scope)),
+    ])
+    return dashboardSnapshot(
+      { materials: materials.items, publishRecords: publishRecords.items, accounts, tasks },
+      new Date(),
+    )
   }
 
   private requireMaterials(): KvTable<string, Material> {

@@ -219,6 +219,32 @@ export const accountPlanPatchSchema = z.object({
   content: z.string().min(1).optional(),
 }).strict()
 
+/** A local calendar date, `YYYY-MM-DD`. */
+export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+/** Body of `POST /api/silipower/workplan-tasks`. */
+export const workplanTaskCreateSchema = z.object({
+  name: z.string().min(1),
+  date: isoDateSchema,
+  description: z.string().optional(),
+  relatedTopic: z.string().optional(),
+  platform: z.string().optional(),
+}).strict()
+
+/** Body of `PATCH /api/silipower/workplan-tasks/:id`. */
+export const workplanTaskPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  status: taskStatusSchema.optional(),
+  description: z.string().optional(),
+  relatedTopic: z.string().optional(),
+  platform: z.string().optional(),
+}).strict()
+
+/** Query string of `GET /api/silipower/workplan-tasks`; `weekStart` must be a Monday. */
+export const workplanListQuerySchema = z.object({
+  weekStart: isoDateSchema,
+}).strict()
+
 /**
  * Error codes every Silipower endpoint may return.
  *
@@ -322,6 +348,15 @@ export type AccountPlanCreateInput = z.infer<typeof accountPlanCreateSchema>
 
 /** Body of `PATCH /api/silipower/account-plans/:id`. */
 export type AccountPlanPatchInput = z.infer<typeof accountPlanPatchSchema>
+
+/** Body of `POST /api/silipower/workplan-tasks`. */
+export type WorkplanTaskCreateInput = z.infer<typeof workplanTaskCreateSchema>
+
+/** Body of `PATCH /api/silipower/workplan-tasks/:id`. */
+export type WorkplanTaskPatchInput = z.infer<typeof workplanTaskPatchSchema>
+
+/** Query string of `GET /api/silipower/workplan-tasks`. */
+export type WorkplanListQuery = z.infer<typeof workplanListQuerySchema>
 
 /** A Silipower error code. */
 export type SilipowerErrorCode = z.infer<typeof silipowerErrorCodeSchema>
